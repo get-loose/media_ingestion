@@ -3,4 +3,4 @@ __pycache__/
 state/ingest.db
 logs/
 dev/host.log
-
+brainstorm.md

@@ -78,7 +78,7 @@ def _log(level: str, message: str, *, path: Optional[Path] = None, extra: str = 
     try:
         logs_dir = _PathForLogs("logs")
         logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = logs_dir / "ingest.log"
+        log_file = logs_dir / "logs/ingest.log"
         with log_file.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except Exception:
@@ -113,8 +113,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # Tolerate missing files; producer may race with file creation/moves.
     exists_flag = path.exists()
+
+    # If something exists at this path but it is not a regular file,
+    # treat this as a validation error and do NOT record an ingest row.
+    if exists_flag and not path.is_file():
+        _log(
+            "ERROR",
+            "EVENT=VALIDATION_ERROR reason=not-a-regular-file",
+            path=path,
+        )
+        return 1
+
     file_size: Optional[int]
-    if exists_flag and path.is_file():
+    if exists_flag:
         try:
             file_size = path.stat().st_size
         except OSError:

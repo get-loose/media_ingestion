@@ -217,6 +217,10 @@ These are the remaining **pre-project** tasks, at a high level.
 - [x] `app/db.py` with schema + `record_ingest_intent`.
 - [x] `dev/path_ingest.py` producer stub with logging.
 - [x] `dev/inspect_ingest_log.py` and `dev/inspect_library_items.py`.
-- [ ] Run and record a few end-to-end scenarios.
-- [ ] Finalize `integration/CONTRACT.md` to describe the boundary.
+- [x] Run and record a few end-to-end scenarios:
+  - [x] Existing regular file (happy path).
+  - [x] Missing file (still recorded, `exists=false`).
+  - [x] Directory path (validation error, no DB row).
+- [x] Finalize `integration/CONTRACT.md` to describe the boundary, with worked examples.
+- [x] Add a simple smoke test (`dev/smoke_test.py`) to exercise the ingestion spine.
 - [ ] Sketch (in docs) how `library_items` will be used in the next phase.

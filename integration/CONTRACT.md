@@ -295,7 +295,88 @@ uv run dev/inspect_library_items.py
 
 ---
 
-## 6. Non-Goals (Pre-Project Phase)
+## 6. Worked Example: Existing Regular File (“Happy Path”)
+
+This example captures an end-to-end run where the target path exists and is a regular file, and the database write succeeds.
+
+### 6.1. Command
+
+```bash
+uv run python -m dev.path_ingest data/inbox/example.mkv
+echo "exit code: $?"
+uv run dev/inspect_ingest_log.py
+```
+
+### 6.2. Producer Log
+
+From `dev/path_ingest.py`:
+
+```text
+2026-01-31T19:05:26Z host LEVEL=INFO EVENT=DISPATCH path=data/inbox/example.mkv
+```
+
+Interpretation:
+
+- At `19:05:26Z`, the producer stub dispatched an ingest for `data/inbox/example.mkv`.
+- This line is written to:
+  - `stdout`
+  - `dev/host.log`
+
+### 6.3. Consumer Log
+
+From `app/ingest.py`:
+
+```text
+2026-01-31T19:05:26Z ingest.py LEVEL=INFO EVENT=INGEST_INTENT_RECORDED path=data/inbox/example.mkv exists=true DB_STATUS=RECORDED db_id=2
+exit code: 0
+```
+
+Interpretation:
+
+- `EVENT=INGEST_INTENT_RECORDED`: ingest attempt was accepted and processed.
+- `path=data/inbox/example.mkv`: same path as producer.
+- `exists=true`: at ingest time, `Path(...).exists()` was true and it was a regular file.
+- `DB_STATUS=RECORDED`: DB insert succeeded.
+- `db_id=2`: `record_ingest_intent` returned primary key `2`.
+- `exit code: 0`:
+  - `app.ingest.main` returned 0.
+  - `dev.path_ingest` propagated this 0.
+
+This matches the contract for a valid file with a successful DB write.
+
+### 6.4. Database Rows
+
+From `dev/inspect_ingest_log.py`:
+
+```text
+=== ingest_log (last 3 rows) ===
+id | original_path | original_filename | file_size | detected_at | processed_flag | group_id | error_message
+--------------------------------------------------------------------------------
+2 | data/inbox/example.mkv | example.mkv | 0 | 2026-01-31T19:05:26.136040+00:00 | 0 | NULL | NULL
+1 | data/inbox/example.mkv | example.mkv | 0 | 2026-01-31T17:00:17.476911+00:00 | 0 | NULL | NULL
+```
+
+Notes:
+
+- Row `id = 2`:
+  - `original_path` and `original_filename` match the path.
+  - `file_size = 0` (file was 0 bytes on disk at ingest time).
+  - `detected_at` matches the time of this latest run.
+  - `processed_flag = 0`, `group_id = NULL`, `error_message = NULL` as expected.
+- Row `id = 1`:
+  - An earlier ingest of the same file.
+
+Crucially:
+
+- The `db_id=2` in the consumer log matches the new row with `id=2` in `ingest_log`.
+- This confirms that:
+  - `record_ingest_intent` ran.
+  - `conn.commit()` in `ingest.py` persisted the row.
+  - The ingestion spine is consistent: what the logs claim is in the DB is actually in the DB.
+
+---
+
+## 7. Non-Goals (Pre-Project Phase)
 
 Out of scope for this contract:
 

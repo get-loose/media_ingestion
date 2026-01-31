@@ -1,2 +1,6 @@
-
 .aider*
+__pycache__/
+state/ingest.db
+logs/
+dev/host.log
+

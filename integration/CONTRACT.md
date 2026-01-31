@@ -1,0 +1,309 @@
+# Ingestion Boundary Contract (Pre-Project Phase)
+
+This document describes the contract between:
+
+- the **producer** (host-side stub, e.g. `dev/path_ingest.py`), and  
+- the **consumer** (`app.ingest`).
+
+It is intentionally narrow and focused on the current pre-project scope.
+
+---
+
+## 1. Invocation Contract
+
+### 1.1. Command Shape
+
+The consumer is invoked as a Python module:
+
+```bash
+uv run python -m app.ingest PATH
+```
+
+During development, the producer stub is invoked as:
+
+```bash
+uv run python -m dev.path_ingest PATH
+```
+
+Where:
+
+- `PATH` is a **single argument** representing the container-visible filesystem path to the file that triggered ingestion.
+- `PATH` is passed through unchanged from producer to consumer (no normalization beyond what `Path(PATH)` does inside the consumer).
+
+### 1.2. Arguments
+
+- Exactly **one positional argument** is expected by `app.ingest`:
+  - `PATH` (string, non-empty)
+
+Invalid usage (missing or extra arguments) is treated as a **usage error** by the consumer and results in:
+
+- Exit code: `1`
+- Log line with `EVENT=USAGE_ERROR`.
+
+The producer stub (`dev/path_ingest.py`) currently enforces:
+
+- At least one argument.
+- Non-empty string for `PATH`.
+
+---
+
+## 2. Producer Responsibilities (`dev/path_ingest.py`)
+
+The producer:
+
+1. Accepts a single path argument from the CLI.
+2. Logs a **dispatch event**.
+3. Delegates to `app.ingest.main([PATH])`.
+4. Propagates the consumer’s exit code.
+
+### 2.1. Producer Logging
+
+Producer logs are written to:
+
+- `stdout`
+- `dev/host.log` (best-effort; failures are ignored)
+
+Log format (single line):
+
+```text
+<timestamp> host LEVEL=INFO EVENT=DISPATCH path=<PATH>
+```
+
+Where:
+
+- `<timestamp>` is UTC in ISO 8601, seconds precision, with `Z` suffix, e.g. `2026-01-31T18:57:03Z`.
+- `host` identifies the producer side.
+- `LEVEL=INFO` is fixed for now.
+- `EVENT=DISPATCH` indicates a dispatch attempt.
+- `path=<PATH>` is the exact path argument passed to the consumer.
+
+Producer logging **must not** affect dispatch semantics:
+
+- Any error writing to `dev/host.log` is ignored.
+- The producer still calls the consumer.
+
+---
+
+## 3. Consumer Responsibilities (`app.ingest`)
+
+The consumer:
+
+1. Parses CLI arguments.
+2. Performs minimal validation on `PATH`.
+3. Optionally inspects the filesystem (existence, file size).
+4. Attempts to record ingestion intent in SQLite.
+5. Emits structured logs.
+6. Exits quickly with a deterministic status code.
+
+### 3.1. Path Validation
+
+Given `PATH`:
+
+- If `PATH` is an empty string:
+  - Exit code: `1`
+  - Log: `EVENT=VALIDATION_ERROR reason=missing-path`
+
+- If something exists at `PATH` and **is not** a regular file (e.g. directory, symlink to directory, etc.):
+  - Exit code: `1`
+  - Log: `EVENT=VALIDATION_ERROR reason=not-a-regular-file path=<PATH>`
+
+- If `PATH` does **not** exist:
+  - This is **not** an error.
+  - `exists=false` is recorded in the final log.
+  - Ingestion intent is still recorded (or attempted) in the DB.
+
+### 3.2. Filesystem Inspection
+
+If `PATH` exists and is a regular file:
+
+- `exists=true` in the final log.
+- `file_size` is obtained via `path.stat().st_size` when possible.
+- If `stat()` fails, `file_size` is recorded as `NULL` in the DB.
+
+If `PATH` does not exist:
+
+- `exists=false` in the final log.
+- `file_size` is recorded as `NULL` in the DB.
+
+### 3.3. Database Interaction
+
+The consumer uses `app.db.get_connection()` and `record_ingest_intent()`.
+
+On a **successful** DB write:
+
+- A new row is inserted into `ingest_log` with:
+  - `original_path` = `str(PATH)`
+  - `original_filename` = `Path(PATH).name`
+  - `file_size` = size in bytes or `NULL`
+  - `detected_at` = current UTC timestamp (ISO 8601 string)
+  - `processed_flag` = `0`
+  - `group_id` = `NULL`
+  - `error_message` = `NULL`
+- `ingest_id` is the new row’s primary key.
+- `DB_STATUS=RECORDED` in the final log.
+- `db_id=<ingest_id>` is included in the final log.
+
+On a **DB failure** (e.g. file not writable, schema issue, etc.):
+
+- No exception escapes `main()`.
+- A log line is emitted:
+
+  ```text
+  ... ingest.py LEVEL=ERROR EVENT=DB_ERROR failed-to-record-ingest-intent path=<PATH> error=<ExceptionType>
+  ```
+
+- The final intent log is still emitted (see below) with:
+  - `DB_STATUS=UNAVAILABLE`
+  - No `db_id` field.
+
+The consumer **never** retries DB operations.
+
+### 3.4. Consumer Logging
+
+All consumer logs:
+
+- Are written to `stdout`.
+- Are also appended (best-effort) to `logs/ingest.log`.
+  - Logging failures are ignored and do not affect exit codes.
+
+#### 3.4.1. Log Format
+
+General format:
+
+```text
+<timestamp> ingest.py LEVEL=<LEVEL> <MESSAGE> [path=<PATH>] [extra fields...]
+```
+
+Where:
+
+- `<timestamp>` is UTC ISO 8601, seconds precision, `Z` suffix.
+- `ingest.py` identifies the consumer.
+- `<LEVEL>` is `INFO` or `ERROR`.
+- `<MESSAGE>` is a short token string, e.g. `EVENT=INGEST_INTENT_RECORDED`.
+
+#### 3.4.2. Final Intent Log
+
+On any **non-usage** path (including DB failures), the consumer emits a final log line:
+
+```text
+<timestamp> ingest.py LEVEL=INFO EVENT=INGEST_INTENT_RECORDED path=<PATH> exists=<true|false> DB_STATUS=<RECORDED|UNAVAILABLE> [db_id=<id>]
+```
+
+- `exists` reflects whether a regular file existed at `PATH` at ingest time.
+- `DB_STATUS`:
+  - `RECORDED` if the DB insert succeeded.
+  - `UNAVAILABLE` if the DB operation failed.
+- `db_id` is present only when the DB insert succeeded.
+
+On **usage errors** (argument parsing failures), the consumer logs:
+
+```text
+<timestamp> ingest.py LEVEL=ERROR EVENT=USAGE_ERROR missing-or-invalid-arguments
+```
+
+and does **not** emit `EVENT=INGEST_INTENT_RECORDED`.
+
+On **validation errors** (e.g. not a regular file), the consumer logs:
+
+```text
+<timestamp> ingest.py LEVEL=ERROR EVENT=VALIDATION_ERROR reason=<reason> path=<PATH>
+```
+
+and does **not** emit `EVENT=INGEST_INTENT_RECORDED`.
+
+### 3.5. Exit Codes
+
+The consumer returns:
+
+- `0` when:
+  - Arguments are valid, and
+  - Path validation passes (file or missing file), and
+  - Ingestion intent is **attempted**, regardless of DB success.
+
+- `1` when:
+  - Argument parsing fails (usage error), or
+  - Validation fails (e.g. path is a directory).
+
+The producer currently propagates this exit code unchanged.
+
+---
+
+## 4. Database Schema (Current Snapshot)
+
+The consumer expects a SQLite database at `state/ingest.db` (by default), with:
+
+### 4.1. `ingest_log`
+
+```sql
+CREATE TABLE IF NOT EXISTS ingest_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    original_path TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    file_size INTEGER,
+    detected_at TEXT NOT NULL,
+    processed_flag INTEGER NOT NULL DEFAULT 0,
+    group_id INTEGER,
+    error_message TEXT
+);
+```
+
+### 4.2. `library_items`
+
+```sql
+CREATE TABLE IF NOT EXISTS library_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingest_id INTEGER NOT NULL,
+    current_path TEXT NOT NULL,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    metadata TEXT,
+    fingerprint TEXT,
+    FOREIGN KEY (ingest_id) REFERENCES ingest_log(id)
+);
+```
+
+Schema creation and PRAGMAs are handled by `app.db` on first connection.
+
+---
+
+## 5. Observability & Inspection
+
+### 5.1. Logs
+
+- Producer logs: `dev/host.log`
+- Consumer logs: `logs/ingest.log`
+
+Both are append-only and best-effort.
+
+### 5.2. Database Inspection Helpers
+
+Development helpers:
+
+- `dev/inspect_ingest_log.py`
+  - Shows recent rows from `ingest_log`.
+- `dev/inspect_library_items.py`
+  - Shows recent rows from `library_items`.
+
+Run via:
+
+```bash
+uv run dev/inspect_ingest_log.py
+uv run dev/inspect_library_items.py
+```
+
+(These are simple scripts, not modules; `uv run script.py` is acceptable here.)
+
+---
+
+## 6. Non-Goals (Pre-Project Phase)
+
+Out of scope for this contract:
+
+- Background workers or asynchronous processing.
+- Media grouping, renaming, or moving files.
+- Retries or scheduling.
+- UI/TUI.
+- Any runtime AI/LLM integration.
+- Reading logs to make runtime decisions.
+
+This contract focuses solely on the **fire-and-forget ingestion boundary** and its immediate persistence and logging behavior.

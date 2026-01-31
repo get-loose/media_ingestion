@@ -146,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
                 detected_at=datetime.now(timezone.utc),
                 error_message=None,
             )
+            conn.commit()
     except Exception as exc:  # noqa: BLE001
         # Database is unavailable or failed. For fire-and-forget semantics,
         # we still consider the ingestion attempt accepted, but we log that

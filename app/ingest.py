@@ -78,7 +78,7 @@ def _log(level: str, message: str, *, path: Optional[Path] = None, extra: str = 
     try:
         logs_dir = _PathForLogs("logs")
         logs_dir.mkdir(parents=True, exist_ok=True)
-        log_file = logs_dir / "logs/ingest.log"
+        log_file = logs_dir / "ingest.log"
         with log_file.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except Exception:

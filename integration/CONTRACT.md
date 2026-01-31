@@ -247,6 +247,9 @@ CREATE TABLE IF NOT EXISTS ingest_log (
 );
 ```
 
+Each call to `app.ingest` that passes validation appends a new row to `ingest_log`.  
+There is no deduplication at this boundary; repeated ingests of the same `PATH` produce multiple rows.
+
 ### 4.2. `library_items`
 
 ```sql
@@ -261,6 +264,9 @@ CREATE TABLE IF NOT EXISTS library_items (
     FOREIGN KEY (ingest_id) REFERENCES ingest_log(id)
 );
 ```
+
+In the pre-project phase, `library_items` is created but not populated or updated.  
+All current behavior is limited to `ingest_log`.
 
 Schema creation and PRAGMAs are handled by `app.db` on first connection.
 
@@ -376,7 +382,109 @@ Crucially:
 
 ---
 
-## 7. Non-Goals (Pre-Project Phase)
+## 7. Worked Example: Missing File
+
+This example captures an end-to-end run where the target path does **not** exist at ingest time, and the database write succeeds.
+
+### 7.1. Command
+
+```bash
+uv run python -m dev.path_ingest data/inbox/does_not_exist.mkv
+echo "exit code: $?"
+uv run dev/inspect_ingest_log.py
+```
+
+### 7.2. Producer Log
+
+```text
+2026-01-31T19:07:42Z host LEVEL=INFO EVENT=DISPATCH path=data/inbox/does_not_exist.mkv
+```
+
+### 7.3. Consumer Log
+
+```text
+2026-01-31T19:07:42Z ingest.py LEVEL=INFO EVENT=INGEST_INTENT_RECORDED path=data/inbox/does_not_exist.mkv exists=false DB_STATUS=RECORDED db_id=4
+exit code: 0
+```
+
+Interpretation:
+
+- `exists=false`: the file did not exist at ingest time.
+- `DB_STATUS=RECORDED`: DB insert succeeded.
+- `db_id=4`: primary key of the new `ingest_log` row.
+- Exit code `0`: missing files are tolerated; the ingest attempt is still considered accepted.
+
+### 7.4. Database Rows
+
+```text
+=== ingest_log (last 5 rows) ===
+id | original_path                  | original_filename   | file_size | detected_at                          | processed_flag | group_id | error_message
+--------------------------------------------------------------------------------
+4 | data/inbox/does_not_exist.mkv | does_not_exist.mkv | NULL | 2026-01-31T19:07:42.381844+00:00 | 0 | NULL | NULL
+3 | data/inbox/does_not_exist.mkv | does_not_exist.mkv | NULL | 2026-01-31T19:07:03.973557+00:00 | 0 | NULL | NULL
+2 | data/inbox/example.mkv        | example.mkv        | 0    | 2026-01-31T19:05:26.136040+00:00 | 0 | NULL | NULL
+1 | data/inbox/example.mkv        | example.mkv        | 0    | 2026-01-31T17:00:17.476911+00:00 | 0 | NULL | NULL
+```
+
+Notes:
+
+- Rows `id = 3` and `id = 4` correspond to two separate ingest attempts for the same missing path.
+- `file_size = NULL` for both, because the file did not exist.
+- This demonstrates the append-only, duplicate-tolerant nature of `ingest_log`.
+
+---
+
+## 8. Worked Example: Directory Path (Validation Error)
+
+This example captures an end-to-end run where the target path is a directory, which is considered invalid input for the ingest boundary.
+
+### 8.1. Command
+
+```bash
+uv run python -m dev.path_ingest data/inbox
+echo "exit code: $?"
+uv run dev/inspect_ingest_log.py
+```
+
+### 8.2. Producer Log
+
+```text
+2026-01-31T19:08:56Z host LEVEL=INFO EVENT=DISPATCH path=data/inbox
+```
+
+### 8.3. Consumer Log
+
+```text
+2026-01-31T19:08:56Z ingest.py LEVEL=ERROR EVENT=VALIDATION_ERROR reason=not-a-regular-file path=data/inbox
+exit code: 1
+```
+
+Interpretation:
+
+- `EVENT=VALIDATION_ERROR reason=not-a-regular-file`: something exists at `PATH`, but it is not a regular file (e.g. a directory).
+- Exit code `1`: this is treated as a validation/usage error.
+- No `EVENT=INGEST_INTENT_RECORDED` line is emitted.
+
+### 8.4. Database Rows
+
+```text
+=== ingest_log (last 5 rows) ===
+id | original_path                  | original_filename   | file_size | detected_at                          | processed_flag | group_id | error_message
+--------------------------------------------------------------------------------
+4 | data/inbox/does_not_exist.mkv | does_not_exist.mkv | NULL | 2026-01-31T19:07:42.381844+00:00 | 0 | NULL | NULL
+3 | data/inbox/does_not_exist.mkv | does_not_exist.mkv | NULL | 2026-01-31T19:07:03.973557+00:00 | 0 | NULL | NULL
+2 | data/inbox/example.mkv        | example.mkv        | 0    | 2026-01-31T19:05:26.136040+00:00 | 0 | NULL | NULL
+1 | data/inbox/example.mkv        | example.mkv        | 0    | 2026-01-31T17:00:17.476911+00:00 | 0 | NULL | NULL
+```
+
+Notes:
+
+- There is **no** row with `original_path = data/inbox`.
+- Validation errors do not create `ingest_log` entries.
+
+---
+
+## 9. Non-Goals (Pre-Project Phase)
 
 Out of scope for this contract:
 

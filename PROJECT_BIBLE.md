@@ -61,6 +61,20 @@ If a question or proposal conflicts with this document, that conflict must be ma
 
 - The exact definition of a “media unit” and the detailed lifecycle of `library_items` are **not yet finalized** and are intentionally left out of this bible for now.
 
+2.3. **Library Paths and Coverage**
+
+- `library_items` is the authoritative truth about media units.
+- A `library_items` row may remain even if:
+  - Its `current_path` is not covered by any configured library path.
+  - Its file is no longer present on disk.
+- A future configuration file (e.g. `library_paths`) may describe where the user claims the library lives, but:
+  - It is **not** the source of truth about media units.
+  - It can be wrong, incomplete, or temporarily out of sync.
+- The system may later:
+  - Detect when `library_items.current_path` is outside all configured library paths.
+  - Mark such rows as “not covered” and log this state.
+  - This does **not** invalidate the `library_items` row or remove it.
+
 ---
 
 ## 3. Contracts and Behavior

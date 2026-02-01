@@ -213,5 +213,5 @@ This keeps us within pre-project guardrails while validating the decision logic 
 For quick copy-paste into Aider next time, use:
 
 ```text
-Please add these files to the chat: PROJECT_BIBLE.md, integration/CONTRACT.md, PRE_PROJECT.md, PRE_PROJECT_PROGRESS.md, app/db.py, app/ingest.py, dev/path_ingest.py, dev/inspect_ingest_log.py, dev/inspect_library_items.py, dev/mediawalker_test/mediawalker_test.sh, dev/mediawalker_test/media_walker_input, dev/brainstorming/2026-01-31T20-00-brainstorm.md, dev/brainstorming/2026-01-31T20-00-preliminary_conclusions.md, dev/brainstorming/2026-02-01T-media_walker_and_library_paths.md
+/add PROJECT_BIBLE.md integration/CONTRACT.md PRE_PROJECT.md PRE_PROJECT_PROGRESS.md app/db.py app/ingest.py dev/path_ingest.py dev/inspect_ingest_log.py dev/inspect_library_items.py dev/mediawalker_test/mediawalker_test.sh dev/mediawalker_test/media_walker_input dev/brainstorming/2026-01-31T20-00-brainstorm.md dev/brainstorming/2026-01-31T20-00-preliminary_conclusions.md dev/brainstorming/2026-02-01T-media_walker_and_library_paths.md
 ```

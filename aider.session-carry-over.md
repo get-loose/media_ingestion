@@ -2,30 +2,6 @@
 
 Next session we want to discuss **a first-try, simple worker** that reasons over `ingest_log` and (conceptually) `library_items`, without yet implementing a real worker loop.
 
-## 3. Brainstorming Context for Worker & Media Units
-
-Re-add these brainstorming docs so we can align the worker design with existing ideas:
-
-- `dev/brainstorming/2026-01-31T20-00-brainstorm.md`
-- `dev/brainstorming/2026-01-31T20-00-preliminary_conclusions.md`
-- `dev/brainstorming/2026-02-01T-media_walker_and_library_paths.md`
-
-Key ideas to remember:
-
-- `library_items` rows represent **media units**:
-  - A media unit = primary media file (mp4/mkv/…) + assets (srt, nfo, jpg).
-  - Assets attach to a media unit; they are not separate `library_items` rows.
-- Future worker responsibilities (design only for now):
-  - Read from `ingest_log` (likely `processed_flag = 0`).
-  - For each row:
-    - Decide if it is a **primary media file** (mp4/mkv/…) or an **asset** (srt/nfo/jpg).
-    - Decide if it represents a **new media unit** or an **update** to an existing one.
-  - Use:
-    - File type (extension),
-    - Path/filename heuristics (e.g. similarly named files in same folder),
-    - Eventually `fingerprint`,
-    to make those decisions.
-
 ## 4. Next-Session Goal: Simple Worker Decision Table
 
 In the next session we want to:

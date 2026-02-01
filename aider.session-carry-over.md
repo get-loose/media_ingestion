@@ -1,119 +1,141 @@
-# Aider Session Carry-Over – Next Topic: First Simple Worker
+# Aider Session Carry-Over – Next Topic: Simple Worker Decision Table
 
-Next session we want to discuss **a first-try, simple worker** that reasons over `ingest_log` and (conceptually) `library_items`, without yet implementing a real worker loop.
+Next session starts from the assumption that the **ingestion spine is stable** (`dev/path_ingest.py` → `app/ingest.py` → `app/db.py` → `ingest_log`) and that `library_items` exists only as an empty schema.
 
-## 4. Next-Session Goal: Simple Worker Decision Table
+The goal is to design, at the **docs level only**, how a future worker would reason over `ingest_log` rows and (conceptually) `library_items` to classify files and decide what *would* happen, without implementing any worker loop or writing to `library_items`.
 
-In the next session we want to:
+---
 
-- Design a **small decision table** (docs, not code) that, given an `ingest_log` row with:
-  - Extension in `{mp4, mkv, srt, nfo, jpg}`,
-  - Path and filename,
-- Decides:
-  - Is this a **primary media candidate** (mp4/mkv) or an **asset** (srt/nfo/jpg)?
-  - If primary:
-    - Should it create a new `library_items` row?
-    - Or attach to / update an existing media unit?
-  - If asset:
-    - Which media unit (if any) should it be associated with?
-      - Based on “similarly named files in the same folder” (e.g. `movie.mkv`, `movie.srt`, `movie.nfo`, `movie.jpg`).
+## 1. Next-Session Goal
 
-Constraints to keep in mind:
+Design a **simple, first-pass decision table** that, for each relevant `ingest_log` row:
 
-- Pre-project: no real worker loop yet.
-- We can:
-  - Define the decision table.
-  - Maybe sketch a one-off, explicit script that **reads** `ingest_log` and prints what it *would* do.
-- We must not:
-  - Implement a background worker or continuous processing.
+- Uses only:
+  - `original_path` (directory + filename),
+  - File extension (lowercased),
+- And decides:
 
-## 5. Draft Decision Table (First Pass)
+1. Is this a **primary media candidate** or an **asset**?
+   - Primary: video files (`.mp4`, `.mkv`) that define a media unit.
+   - Asset: subtitles / NFO / images (`.srt`, `.nfo`, `.jpg`) that attach to a media unit.
 
-This table assumes:
-- Extensions in `{mp4, mkv, srt, nfo, jpg}`.
-- We only use:
-  - Extension,
-  - Directory,
-  - Basename without extension,
-  - Very simple “similarly named in same folder” heuristics.
-- We do **not** rely on `fingerprint` yet.
+2. For a **primary**:
+   - Should it create a **new media unit** (`library_items` row)?
+   - Or should it be treated as an **update/alternate** for an existing media unit in the same folder?
 
-Legend:
-- `dir(path)`: directory component.
-- `stem(path)`: filename without extension.
-- `ext(path)`: lowercase extension without dot.
-- “Existing media unit in folder with same stem” means:
-  - A `library_items` row whose `current_path` is in the same directory,
-  - And whose primary file’s stem matches `stem(path)`.
+3. For an **asset**:
+   - Can it be **unambiguously attached** to a single primary in the same folder?
+   - Or is it **ambiguous** (multiple possible primaries)?
+   - Or is it an **orphan** (no matching primary yet)?
 
-### Step 1 – Classify primary vs asset
+All of this remains **design only** in the next session:
+- No background worker.
+- No code that mutates `library_items`.
+- No code that flips `processed_flag`.
 
-| Condition                         | Classification | Notes                                  |
-|----------------------------------|----------------|----------------------------------------|
-| `ext in {mp4, mkv}`              | PRIMARY        | Candidate for media unit root.        |
-| `ext in {srt, nfo, jpg}`         | ASSET          | Attachable to a primary media unit.   |
-| Anything else                    | IGNORE/FUTURE  | Out of scope for this first worker.   |
+---
 
-### Step 2 – Primary media handling (mp4/mkv)
+## 2. Draft Decision Table (To Refine Next Session)
 
-Given a PRIMARY row:
+We start from this first-pass table and refine it:
 
-| Situation                                                                 | Action                                                                 | Rationale |
-|---------------------------------------------------------------------------|-------------------------------------------------------------------------|-----------|
-| No existing `library_items` in same folder with same stem                | Create **new media unit** (`library_items` row).                       | New title in this folder. |
-| Existing media unit in same folder with same stem, same extension        | Treat as **update/replace** of primary file for that media unit.      | Same logical media, new file version. |
-| Existing media unit in same folder with same stem, different extension   | Attach as **alternate primary** (same media unit, multiple formats).   | e.g. `movie.mkv` and `movie.mp4`. |
-| Existing media unit in different folder but same stem                    | **Do not auto-link**; treat as **new media unit**.                     | Avoid cross-folder collisions; future heuristics may revisit. |
-| Multiple media units in same folder with same stem (should be rare)     | Mark as **ambiguous**; log decision as “needs manual resolution”.      | Avoid guessing when state is inconsistent. |
+### 2.1 Classification by Extension
 
-### Step 3 – Asset handling (srt/nfo/jpg)
+- If `ext(path) in {mp4, mkv}` → **PRIMARY**
+- If `ext(path) in {srt, nfo, jpg}` → **ASSET**
+- Otherwise → **IGNORE/FUTURE**
 
-Given an ASSET row:
+Where:
+- `ext(path)` is the lowercase extension without dot.
 
-| Situation                                                                 | Action                                                                 | Rationale |
-|---------------------------------------------------------------------------|-------------------------------------------------------------------------|-----------|
-| Exactly one primary media unit in same folder with same stem             | Attach asset to that media unit.                                      | Clear 1:1 match. |
-| Multiple primary media units in same folder with same stem (e.g. cut1/2) | Mark as **ambiguous**; do not auto-attach.                            | Avoid mis-association. |
-| No primary media unit in same folder with same stem                      | Record as **unattached asset** (or “orphan asset”) for now.           | Primary may arrive later or be missing. |
-| Asset filename includes language/extra tags (e.g. `movie.en.srt`)        | Use base stem before first dot (`movie`) to match; otherwise as above. | Simple language-tag heuristic. |
+### 2.2 Primary Handling (mp4/mkv)
 
-### Step 4 – Interaction with `ingest_log.processed_flag`
+Using only:
+- `dir(path)` – directory component of `original_path`,
+- `stem(path)` – filename without extension,
+- “same folder + same stem” as a grouping heuristic.
 
-For this first worker:
+For a PRIMARY ingest row:
 
-- Only consider `ingest_log` rows where `processed_flag = 0`.
-- For each processed row:
-  - Decide classification and action using the above tables.
-  - If we can make a **definite** decision (no ambiguity):
-    - Update `library_items` accordingly.
-    - Set `processed_flag = 1` for that `ingest_log` row.
-  - If decision is **ambiguous**:
-    - Leave `processed_flag = 0` (or set a separate status field if we add one later).
-    - Emit a log line describing the ambiguity and what evidence was considered.
+- **No existing media unit** in the same folder with the same stem  
+  → Treat as **new media unit** (would create a new `library_items` row).
 
-(Implementation of this behavior is **future**; for now this is design only.)
+- **Existing media unit** in the same folder with the same stem, **same extension**  
+  → Treat as **update/replace** of the primary file for that media unit.
 
-## 6. One-Off “What Would I Do?” Script (Concept Sketch)
+- **Existing media unit** in the same folder with the same stem, **different extension**  
+  → Treat as an **alternate primary** for the same media unit (e.g. `movie.mkv` + `movie.mp4`).
 
-In this pre-project phase, instead of a real worker loop, we may later add a **one-off helper** like:
+- Existing media unit with same stem but in a **different folder**  
+  → Treat as a **new media unit** (no cross-folder linking in this first pass).
 
-- `dev/worker_dry_run.py` (name TBD)
+- **Multiple media units** in the same folder with the same stem  
+  → Mark as **ambiguous**; do not guess.
 
-Behavior (conceptual only):
+### 2.3 Asset Handling (srt/nfo/jpg)
 
-- Reads a subset of `ingest_log` rows (e.g. latest N, or where `processed_flag = 0`).
-- For each row:
-  - Applies the decision table above.
-  - Prints a line such as:
+For an ASSET ingest row:
 
-    - `DECISION primary:new_unit path=/media/movies/movie.mkv reason=no_existing_same_stem`
-    - `DECISION asset:attach path=/media/movies/movie.srt target=/media/movies/movie.mkv reason=single_match_same_stem`
-    - `DECISION asset:ambiguous path=/media/movies/movie.srt reason=multiple_primary_same_stem`
-    - `DECISION asset:orphan path=/media/movies/movie.srt reason=no_primary_same_stem`
+- **Exactly one** primary media unit in the same folder with the same stem  
+  → **Attach asset** to that media unit.
 
-- Does **not**:
-  - Modify `library_items`.
-  - Flip `processed_flag`.
-  - Run continuously.
+- **Multiple** primaries in the same folder with the same stem  
+  → **Ambiguous**; do not auto-attach.
 
-This keeps us within pre-project guardrails while validating the decision logic against real `ingest_log` data.
+- **No** primary in the same folder with the same stem  
+  → Treat as **unattached/orphan asset** for now.
+
+- Filenames like `movie.en.srt`  
+  → Use the base stem before the first dot (`movie`) when matching; then apply the same rules.
+
+### 2.4 Interaction with `processed_flag` (Future Behavior)
+
+Conceptual future behavior (not to be implemented next session):
+
+- Worker would only consider `ingest_log` rows where `processed_flag = 0`.
+- If the decision is **definite**:
+  - It would update `library_items` accordingly.
+  - It would set `processed_flag = 1` for that row.
+- If the decision is **ambiguous**:
+  - It would leave `processed_flag = 0` (or use a future status field).
+  - It would emit a log describing the ambiguity and the evidence.
+
+Next session we only refine this logic; we do **not** implement it.
+
+---
+
+## 3. Optional Dev Helper (Design Only)
+
+We may also sketch (but not necessarily implement) a **dry-run helper**:
+
+- Name idea: `dev/worker_dry_run.py`.
+
+Concept:
+
+- Reads a subset of `ingest_log` rows (e.g. latest N or `processed_flag = 0`).
+- Applies the decision table above in pure Python.
+- Prints lines such as:
+
+  - `DECISION primary:new_unit path=... reason=no_existing_same_stem`
+  - `DECISION primary:update path=... target=... reason=existing_same_stem_same_ext`
+  - `DECISION asset:attach path=... target=... reason=single_match_same_stem`
+  - `DECISION asset:ambiguous path=... reason=multiple_primary_same_stem`
+  - `DECISION asset:orphan path=... reason=no_primary_same_stem`
+
+Constraints:
+
+- Must **not** modify `library_items`.
+- Must **not** change `processed_flag`.
+- Must **not** run as a background loop.
+
+---
+
+## 4. Files to Re-Add Next Session
+
+For the next session, please add these files to the chat:
+
+```text
+/add app/db.py app/ingest.py dev/path_ingest.py dev/inspect_ingest_log.py dev/inspect_library_items.py dev/mediawalker_test/mediawalker_test.sh dev/mediawalker_test/media_walker_input dev/brainstorming/2026-01-31T20-00-brainstorm.md dev/brainstorming/2026-01-31T20-00-preliminary_conclusions.md dev/brainstorming/2026-02-01T-media_walker_and_library_paths.md PRE_PROJECT_PROGRESS.md
+```
+
+(Other always-read docs like `PROJECT_BIBLE.md`, `PRE_PROJECT.md`, `SQLite_schema_design.md`, `integration/CONTRACT.md`, and `Database_design_guidance.md` do not need to be listed here.)

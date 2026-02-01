@@ -33,8 +33,8 @@ COLOR_GREEN="\033[32m"
 COLOR_DARK_GREEN="\033[32;2m"
 COLOR_YELLOW="\033[33m"
 COLOR_CYAN="\033[36m"
-COLOR_BLUE1="\033[34m"
-COLOR_BLUE2="\033[94m"
+COLOR_BLUE1="\033[94m"  # lighter blue for [HOST]
+COLOR_BLUE2="\033[34m"  # slightly darker blue for [INGEST-LOG]
 COLOR_RED="\033[31m"
 
 color() {
@@ -123,8 +123,9 @@ show_last_ingest_intent() {
         return
     fi
 
-    # Color exists=true/false inside the line
-    local colored_line="$line"
+    # Color exists=true/false inside the line, and make the whole line blue
+    local colored_line
+    colored_line="$(color "$line" "$COLOR_BLUE2")"
     colored_line="${colored_line//exists=true/$(color 'exists=true' "$COLOR_RED")}"
     colored_line="${colored_line//exists=false/$(color 'exists=false' "$COLOR_GREEN")}"
 

@@ -124,3 +124,48 @@
   - Must not modify the production DB or logs.
   - Must not introduce runtime dependencies (dev-only helper).
   - PRE-PROJECT: no background loops; explicit one-shot snapshot generation.
+
+## 6. Future Workers – Media Unit Grouping and Thumbnails
+
+### 6.1 Worker A – Media Unit Grouping (Design & Prototype)
+
+- Responsibility:
+  - For each bottom-level folder:
+    - Group files into media units based on shared core name / structure.
+- Inputs:
+  - `ingest_log` rows (original_path, original_filename, extension).
+- Behavior (PRE-PROJECT / dry-run):
+  - Treat each bottom-level folder as a high-cohesion cluster.
+  - For each folder:
+    - Analyze all filenames together.
+    - Identify which files belong to the same media unit.
+    - Classify files as PRIMARY (video) vs ASSET (jpg/nfo/srt/…).
+  - No writes to `library_items`.
+  - No changes to `processed_flag`.
+- Output (dry-run):
+  - Print or log:
+    - `MEDIA_UNIT folder=... core=... files=[...]`
+    - Decorations observed per unit and per folder (opaque tokens for now).
+
+### 6.2 Worker B – JPG Presence, Naming, and Folder Thumbnails (Design Only)
+
+- Responsibility:
+  - Ensure each media unit has a jpg and that Kodi-facing conventions are met.
+- Behavior (target, not implemented in PRE-PROJECT):
+  - For each media unit:
+    - Check if at least one jpg exists:
+      - If missing: for now, do nothing (just report).
+      - If present:
+        - Ensure there is a jpg whose filename matches the video filename.
+        - If not, rename/copy as needed without losing the original name (e.g. log or track original).
+  - For each folder:
+    - If `folder.jpg` is absent:
+      - Choose the oldest jpg in the folder and copy it as `folder.jpg`.
+    - If a `ffff*.jpg` exists:
+      - Treat it as user-selected folder thumbnail:
+        - Copy it as `folder.jpg`.
+        - Strip the `ffff` prefix from the original so it again matches the media unit filename.
+- Constraints:
+  - No background loops.
+  - No writes to `library_items` in PRE-PROJECT.
+  - Actual ffmpeg integration is a later step.

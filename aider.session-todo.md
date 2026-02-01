@@ -92,3 +92,35 @@
   - No writes to `library_items`.
   - No changes to `processed_flag`.
   - No background loop.
+
+## 5. Anonymized Dev / Sharing Workflow (Design Only)
+
+- Goal: enable sharing realistic ingest data in chat without exposing real paths or filenames.
+
+- Design a docs-only plan for an anonymized mirror of:
+  - `ingest_log`
+  - `library_items`
+  - (optionally) selected log lines
+
+- Requirements:
+  - Folder paths, subfolders, and filenames are **deterministically anonymized**.
+  - Directory structure is preserved (same depth, same counts).
+  - Same original path → same anonymized path (stable mapping).
+  - No way to reverse from anonymized data back to real paths.
+
+- Proposed approach:
+  - Dev-only helper script, e.g. `dev/anonymize_snapshot.py`.
+  - Reads from the real DB and logs; writes:
+    - Either a separate SQLite file (e.g. `state/anonymized_ingest.db`), or
+    - A JSON/text snapshot suitable for pasting into chat.
+  - Mapping strategy (examples to refine):
+    - Directories: `/media/Movies/Some Show/Season 01/` → `/D1/D2/D3/D4/`
+    - Filenames: `Some.Show.S01E01.1080p.mkv` → `F0001.mkv`
+  - Decide which fields to anonymize vs keep:
+    - Anonymize: `original_path`, `original_filename`, any path-like fields.
+    - Keep: timestamps, sizes, extensions, status flags.
+
+- Constraints:
+  - Must not modify the production DB or logs.
+  - Must not introduce runtime dependencies (dev-only helper).
+  - PRE-PROJECT: no background loops; explicit one-shot snapshot generation.

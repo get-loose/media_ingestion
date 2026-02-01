@@ -14,7 +14,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi"}
 ASSET_EXTENSIONS = {".jpg", ".jpeg", ".nfo"}
 ALL_EXTENSIONS = VIDEO_EXTENSIONS | ASSET_EXTENSIONS
 
-SIMILARITY_THRESHOLD = 80
+SIMILARITY_THRESHOLD = 90
 
 
 @dataclass
@@ -436,7 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         sanitized_name = _sanitize_folder_name(folder)
         report_filename = f"{timestamp}_{sanitized_name}.txt"
-        report_path = Path("dev") / "fuzzy_test" / report_filename
+        report_path = Path("dev") / "fuzzy_test" / "logs" / report_filename
 
         _write_report(folder, final_clusters, final_singletons, report_path)
         sys.stderr.write(f"[INFO] Wrote report: {report_path}\n")

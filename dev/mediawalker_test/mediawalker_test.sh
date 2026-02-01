@@ -17,6 +17,11 @@
 #    and treats each non-comment, non-empty line as a file or folder to walk.
 #
 # This script is experimental and NOT part of the ingestion contract.
+#
+# Extra dev feature:
+# - If the environment variable MEDIAWALKER_TEST_ERRORS=1 is set, the script
+#   will also send a few deliberately bad paths through the ingest spine to
+#   exercise error logging and show [INGEST-ERR] output.
 
 set -euo pipefail
 
@@ -201,6 +206,35 @@ walk_path() {
     fi
 }
 
+# Deliberately exercise error paths in the ingest spine so that
+# [INGEST-ERR] output is visible during development.
+run_error_scenarios() {
+    printf "\n%s\n" "$(color '=== mediawalker_test.sh error scenarios (dev-only) ===' "$COLOR_BOLD")"
+
+    # 1) Directory path: should trigger VALIDATION_ERROR reason=not-a-regular-file
+    local dir_path="${PROJECT_ROOT}/data/inbox"
+    if [[ -d "$dir_path" ]]; then
+        printf "\n%s %s\n" \
+            "$(color '[ERR-TEST]' "$COLOR_ORANGE1")" \
+            "$(color "ingesting directory path (expected validation error): $dir_path" "$COLOR_ORANGE2")"
+        ingest_file "$dir_path"
+    else
+        printf "\n%s %s\n" \
+            "$(color '[ERR-TEST]' "$COLOR_DIM")" \
+            "$(color "skip directory error test, directory not found: $dir_path" "$COLOR_DIM")"
+    fi
+
+    # 2) Clearly bogus path: should be treated as missing file (no error, exists=false)
+    #    This is included to contrast with the directory case.
+    local missing_path="${PROJECT_ROOT}/data/inbox/this_file_does_not_exist_for_error_test.mp4"
+    printf "\n%s %s\n" \
+        "$(color '[ERR-TEST]' "$COLOR_ORANGE1")" \
+        "$(color "ingesting missing file (expected exists=false, no error): $missing_path" "$COLOR_ORANGE2")"
+    ingest_file "$missing_path"
+
+    printf "\n%s\n" "$(color '=== mediawalker_test.sh error scenarios done ===' "$COLOR_BOLD")"
+}
+
 # Determine input paths
 declare -a PATHS=()
 
@@ -236,5 +270,10 @@ for p in "${PATHS[@]}"; do
         walk_path "${PROJECT_ROOT}/${p}"
     fi
 done
+
+# Optional dev-only error scenarios to exercise [INGEST-ERR]
+if [[ "${MEDIAWALKER_TEST_ERRORS:-0}" == "1" ]]; then
+    run_error_scenarios
+fi
 
 printf "\n%s\n" "$(color '=== mediawalker_test.sh done ===' "$COLOR_BOLD")"

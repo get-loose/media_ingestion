@@ -30,8 +30,12 @@ COLOR_RESET="\033[0m"
 COLOR_BOLD="\033[1m"
 COLOR_DIM="\033[2m"
 COLOR_GREEN="\033[32m"
+COLOR_DARK_GREEN="\033[32;2m"
 COLOR_YELLOW="\033[33m"
 COLOR_CYAN="\033[36m"
+COLOR_BLUE1="\033[34m"
+COLOR_BLUE2="\033[94m"
+COLOR_RED="\033[31m"
 
 color() {
     # usage: color "TEXT" "$COLOR_CODE"
@@ -64,9 +68,19 @@ ingest_file() {
     local rel_path
     rel_path="$(realpath --relative-to="${PROJECT_ROOT}" "$abs_path")"
 
+    # Split rel_path into dir and filename for nicer coloring
+    local dir_part file_part colored_path
+    if [[ "$rel_path" == */* ]]; then
+        dir_part="${rel_path%/*}/"
+        file_part="${rel_path##*/}"
+        colored_path="$(color "$dir_part" "$COLOR_GREEN")$(color "$file_part" "$COLOR_DARK_GREEN")"
+    else
+        colored_path="$(color "$rel_path" "$COLOR_DARK_GREEN")"
+    fi
+
     printf "\n%s %s\n" \
         "$(color '[INGEST]' "$COLOR_GREEN")" \
-        "$(color "$rel_path" "$COLOR_CYAN")"
+        "$colored_path"
 
     # Local dev: call the producer stub directly via uv
     # NOTE: In final Unraid deployment, this will be replaced by a docker exec
@@ -75,6 +89,48 @@ ingest_file() {
         cd "${PROJECT_ROOT}"
         uv run python -m dev.path_ingest "${rel_path}"
     )
+
+    # After ingest, show the latest host and ingest log lines for context
+    show_last_host_dispatch
+    show_last_ingest_intent
+}
+
+# Show the last DISPATCH line from dev/host.log (producer) in blue
+show_last_host_dispatch() {
+    local log_file="${PROJECT_ROOT}/dev/host.log"
+    if [[ ! -f "$log_file" ]]; then
+        return
+    fi
+    local line
+    line="$(grep 'EVENT=DISPATCH' "$log_file" | tail -n 1 || true)"
+    if [[ -n "$line" ]]; then
+        printf "%s %s\n" \
+            "$(color '[HOST]' "$COLOR_BLUE1")" \
+            "$(color "$line" "$COLOR_BLUE1")"
+    fi
+}
+
+# Show the last INGEST_INTENT_RECORDED line from logs/ingest.log (consumer) in another blue
+# and color exists=true/false differently.
+show_last_ingest_intent() {
+    local log_file="${PROJECT_ROOT}/logs/ingest.log"
+    if [[ ! -f "$log_file" ]]; then
+        return
+    fi
+    local line
+    line="$(grep 'EVENT=INGEST_INTENT_RECORDED' "$log_file" | tail -n 1 || true)"
+    if [[ -z "$line" ]]; then
+        return
+    fi
+
+    # Color exists=true/false inside the line
+    local colored_line="$line"
+    colored_line="${colored_line//exists=true/$(color 'exists=true' "$COLOR_RED")}"
+    colored_line="${colored_line//exists=false/$(color 'exists=false' "$COLOR_GREEN")}"
+
+    printf "%s %s\n" \
+        "$(color '[INGEST-LOG]' "$COLOR_BLUE2")" \
+        "$colored_line"
 }
 
 # Walk a single path (file or directory)

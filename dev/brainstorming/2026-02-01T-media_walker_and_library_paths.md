@@ -139,3 +139,52 @@ Some ideas here may be incompatible with earlier brainstorms; where that is the 
     - `.nfo` and `.jpg` as assets.
     - Fingerprinting and deduplication.
   - This remains an open design area for future work.
+
+---
+
+## 6. Logs and Color Policy (Dev Tools vs Persistent Logs)
+
+- Persistent log files:
+  - `dev/host.log` (producer-side)
+  - `logs/ingest.log` (consumer-side)
+- These files must remain **plain text**:
+  - No ANSI color codes.
+  - Optimized for:
+    - Grep/awk-style inspection.
+    - Possible future parsing by tools.
+    - Viewing in plain editors.
+
+- Terminal-only / dev inspection tools may use colors:
+  - `dev/inspect_ingest_log.py`
+  - `dev/mediawalker_test/mediawalker_test.sh`
+  - Future inspection helpers.
+- These tools:
+  - Are explicitly **dev-only**.
+  - May use ANSI colors and spacing to improve readability.
+  - Must not write their colored output into persistent log files.
+
+---
+
+## 7. Pre-Project Guardrails for Workers and Library Items
+
+- No background workers or processing loops are implemented in the pre-project phase.
+- `library_items`:
+  - Exists in the schema.
+  - Is not populated or updated by any code yet.
+  - Is inspected only via `dev/inspect_library_items.py`.
+
+- Any logic that:
+  - Reads from `ingest_log` as a queue, or
+  - Writes/updates `library_items`,
+  is considered **post–pre-project** and should be captured as design only (in docs) for now.
+
+- The `exists=true/false` flag in `ingest_log` / `logs/ingest.log`:
+  - Reflects **filesystem state at ingest time only**.
+  - Does **not** indicate:
+    - Whether a media unit is new vs existing.
+    - Whether a `library_items` row already exists.
+  - Future worker logic will use:
+    - File type (extension),
+    - Path/filename heuristics,
+    - And eventually `fingerprint`,
+    to decide “new media unit” vs “update existing media unit”.

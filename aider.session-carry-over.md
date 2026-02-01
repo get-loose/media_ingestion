@@ -2,34 +2,6 @@
 
 Next session we want to discuss **a first-try, simple worker** that reasons over `ingest_log` and (conceptually) `library_items`, without yet implementing a real worker loop.
 
-## 1. Design Truths to Carry Over
-
-These are **gospel** and must not be contradicted:
-
-- From `PROJECT_BIBLE.md`:
-  - `ingest_log`:
-    - Append-only history of ingestion attempts that passed validation.
-    - No deduplication at this boundary.
-    - Rows are never deleted in normal operation.
-  - `library_items`:
-    - Represents the **truth** about media units (one row per media unit, not per file).
-    - Deleting rows is a **big event**, not normal behavior.
-    - A row may remain even if:
-      - Its `current_path` is not covered by any configured library path.
-      - Its file is no longer present on disk.
-  - Library paths:
-    - A future `library_paths` config is **not** truth; it can be wrong or incomplete.
-    - `library_items` remains authoritative even when not covered by `library_paths`.
-
-- From `integration/CONTRACT.md`:
-  - `exists=true/false`:
-    - Reflects **filesystem state at ingest time only**.
-    - Does **not** indicate “new vs existing media unit”.
-  - `EVENT=INGEST_INTENT_RECORDED`:
-    - Emitted only when validation passes (file or missing file).
-    - Includes `exists`, `DB_STATUS`, and optional `db_id`.
-  - Validation errors (e.g. directory path) do **not** create `ingest_log` rows.
-
 ## 2. Current Implementation to Have in Context
 
 We will reason about a worker **on top of** the existing spine. Please re-add these files (or their contents) in the next session:

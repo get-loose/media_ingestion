@@ -36,6 +36,8 @@ COLOR_CYAN="\033[36m"
 COLOR_BLUE1="\033[94m"  # lighter blue for [HOST]
 COLOR_BLUE2="\033[34m"  # slightly darker blue for [INGEST-LOG]
 COLOR_RED="\033[31m"
+COLOR_ORANGE1="\033[38;5;208m"  # bright orange
+COLOR_ORANGE2="\033[38;5;214m"  # lighter orange
 
 color() {
     # usage: color "TEXT" "$COLOR_CODE"
@@ -82,17 +84,23 @@ ingest_file() {
         "$(color '[INGEST]' "$COLOR_GREEN")" \
         "$colored_path"
 
-    # Local dev: call the producer stub directly via uv
-    # NOTE: In final Unraid deployment, this will be replaced by a docker exec
-    # into the container, not a direct uv call on the host.
+    local exit_code
     (
         cd "${PROJECT_ROOT}"
-        uv run python -m dev.path_ingest "${rel_path}"
+        # Suppress raw stdout/stderr from the Python call; we rely on log files instead.
+        uv run python -m dev.path_ingest "${rel_path}" >/dev/null 2>&1
     )
+    exit_code=$?
 
     # After ingest, show the latest host and ingest log lines for context
     show_last_host_dispatch
     show_last_ingest_intent
+
+    # On non-zero exit (usage/validation errors, unexpected failures),
+    # also show the last ERROR event from logs/ingest.log in orange.
+    if [[ "$exit_code" -ne 0 ]]; then
+        show_last_ingest_error
+    fi
 }
 
 # Show the last DISPATCH line from dev/host.log (producer) in blue
@@ -131,6 +139,30 @@ show_last_ingest_intent() {
 
     printf "%s %s\n" \
         "$(color '[INGEST-LOG]' "$COLOR_BLUE2")" \
+        "$colored_line"
+}
+
+# Show the last ERROR event from logs/ingest.log (consumer) in orange shades.
+show_last_ingest_error() {
+    local log_file="${PROJECT_ROOT}/logs/ingest.log"
+    if [[ ! -f "$log_file" ]]; then
+        return
+    fi
+
+    # Look for the last ERROR-level line
+    local line
+    line="$(grep 'LEVEL=ERROR' "$log_file" | tail -n 1 || true)"
+    if [[ -z "$line" ]]; then
+        return
+    fi
+
+    # Color the whole line in a lighter orange, and highlight EVENT=... in a brighter orange
+    local colored_line
+    colored_line="$(color "$line" "$COLOR_ORANGE2")"
+    colored_line="${colored_line//EVENT=/$(color 'EVENT=' "$COLOR_ORANGE1")}"
+
+    printf "%s %s\n" \
+        "$(color '[INGEST-ERR]' "$COLOR_ORANGE1")" \
         "$colored_line"
 }
 

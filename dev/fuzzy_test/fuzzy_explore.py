@@ -23,6 +23,13 @@ class Cluster:
     members: List[Path]
 
 
+@dataclass
+class FinalCluster:
+    core_guess: str
+    members: List[Path]
+    video_count: int
+
+
 def _is_hidden(path: Path) -> bool:
     return path.name.startswith(".")
 
@@ -160,6 +167,82 @@ def _compute_core_and_decorations(
     return core_guess, decorations
 
 
+def _build_final_clusters(
+    initial_clusters: Sequence[Cluster],
+    video_files: Sequence[Path],
+    asset_files: Sequence[Path],
+) -> Tuple[List[FinalCluster], List[Path]]:
+    # All candidate files (videos + assets)
+    all_files: List[Path] = sorted(
+        list(video_files) + list(asset_files),
+        key=lambda p: p.name,
+    )
+
+    # Collect core candidates from initial fuzzy clusters
+    core_candidates: List[str] = []
+    for cluster in initial_clusters:
+        core_guess, _ = _compute_core_and_decorations(cluster)
+        if core_guess:
+            core_candidates.append(core_guess)
+
+    # Deduplicate cores
+    core_candidates = sorted(set(core_candidates))
+
+    if not core_candidates:
+        # No cores at all: everything is a singleton
+        return [], all_files
+
+    # Compute average core length
+    avg_len = sum(len(c) for c in core_candidates) / len(core_candidates)
+    short_threshold = 0.1 * avg_len  # 10% of average length
+
+    normal_cores = [c for c in core_candidates if len(c) >= short_threshold]
+    short_cores = [c for c in core_candidates if len(c) < short_threshold]
+
+    normal_cores.sort()
+    short_cores.sort()
+    ordered_cores = normal_cores + short_cores
+
+    # Assign files to cores by prefix
+    file_assigned: Dict[Path, bool] = {f: False for f in all_files}
+    final_clusters: List[FinalCluster] = []
+
+    for core in ordered_cores:
+        members: List[Path] = []
+        for f in all_files:
+            if file_assigned[f]:
+                continue
+            stem = f.stem
+            if stem.startswith(core):
+                members.append(f)
+
+        if not members:
+            # This core did not capture any files; discard it
+            continue
+
+        for f in members:
+            file_assigned[f] = True
+
+        video_count = sum(
+            1 for f in members if f.suffix.lower() in VIDEO_EXTENSIONS
+        )
+        final_clusters.append(
+            FinalCluster(
+                core_guess=core,
+                members=sorted(members, key=lambda p: p.name),
+                video_count=video_count,
+            )
+        )
+
+    # Any unassigned files are singletons
+    final_singletons: List[Path] = [
+        f for f, assigned in file_assigned.items() if not assigned
+    ]
+    final_singletons.sort(key=lambda p: p.name)
+
+    return final_clusters, final_singletons
+
+
 def _sanitize_folder_name(folder: Path) -> str:
     base = folder.name or "root"
     sanitized_chars: List[str] = []
@@ -179,13 +262,12 @@ def _format_decoration_token(token: str) -> str:
 
 def _write_report(
     folder: Path,
-    clusters: Sequence[Cluster],
+    clusters: Sequence[FinalCluster],
     singletons: Sequence[Path],
     report_path: Path,
 ) -> None:
     lines: List[str] = []
 
-    all_files_count = len(clusters) + len(singletons)
     considered_files: List[Path] = []
     for c in clusters:
         considered_files.extend(c.members)
@@ -206,8 +288,7 @@ def _write_report(
     lines.append("MEDIA UNIT CORES (clusters only):")
     core_summaries: List[Tuple[str, int]] = []
     for cluster in clusters:
-        core_guess, _ = _compute_core_and_decorations(cluster)
-        core_summaries.append((core_guess, len(cluster.members)))
+        core_summaries.append((cluster.core_guess, len(cluster.members)))
 
     for core_guess, count in core_summaries:
         lines.append(f'  core="{core_guess}"  files={count}')
@@ -215,28 +296,69 @@ def _write_report(
     lines.append(f"TOTAL MEDIA UNITS (clusters): {len(clusters)}")
     lines.append("")
 
+    # CLUSTERS WITH MULTIPLE VIDEO FILES
+    lines.append("CLUSTERS WITH MULTIPLE VIDEO FILES:")
+    multi_video = [
+        c for c in clusters
+        if c.video_count > 1
+    ]
+    if not multi_video:
+        lines.append("  (none)")
+    else:
+        for c in multi_video:
+            lines.append(
+                f'  core="{c.core_guess}"  video_files={c.video_count}  total_files={len(c.members)}'
+            )
+    lines.append("")
+
     # FOLDER DECORATIONS SUMMARY
     decoration_counter: Counter[str] = Counter()
+    core_strings = {c.core_guess for c in clusters}
+
     for cluster in clusters:
-        _, decorations = _compute_core_and_decorations(cluster)
+        core_guess = cluster.core_guess
+        decorations: Dict[Path, List[str]] = {}
+        # Compute decorations relative to this core_guess
+        for path in cluster.members:
+            stem = path.stem
+            if core_guess and stem.startswith(core_guess):
+                decoration_part = stem[len(core_guess):]
+            else:
+                decoration_part = stem
+            tokens = _split_decoration_tokens(decoration_part)
+            decorations[path] = tokens
+
         for tokens in decorations.values():
             for token in tokens:
-                decoration_counter[_format_decoration_token(token)] += 1
+                token = _format_decoration_token(token)
+                # Skip tokens that are exactly a core name
+                if token in core_strings:
+                    continue
+                decoration_counter[token] += 1
 
-    lines.append("FOLDER DECORATIONS (top 50 tokens across clusters):")
+    lines.append("FOLDER DECORATIONS (all tokens across clusters, excluding core names):")
     if decoration_counter:
-        # Sort by descending count, then lexicographically
         sorted_tokens = sorted(
             decoration_counter.items(),
             key=lambda kv: (-kv[1], kv[0]),
         )
-        for token, count in sorted_tokens[:50]:
+        for token, count in sorted_tokens:
             lines.append(f'  "{token}" : {count}')
     lines.append("")
 
     # CLUSTER DETAILS
     for idx, cluster in enumerate(clusters, start=1):
-        core_guess, decorations = _compute_core_and_decorations(cluster)
+        core_guess = cluster.core_guess
+        decorations: Dict[Path, List[str]] = {}
+        for path in cluster.members:
+            stem = path.stem
+            if core_guess and stem.startswith(core_guess):
+                decoration_part = stem[len(core_guess):]
+            else:
+                decoration_part = stem
+            tokens = _split_decoration_tokens(decoration_part)
+            decorations[path] = tokens
+
         lines.append(f"CLUSTER #{idx}")
         lines.append(f"  core_guess: {core_guess}")
         lines.append(f"  members ({len(cluster.members)}):")
@@ -303,13 +425,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             continue
 
         video_files, asset_files = _split_files_by_role(candidate_files)
-        clusters, singletons = _cluster_files(video_files, asset_files)
+        initial_clusters, _ = _cluster_files(video_files, asset_files)
+
+        # Build final clusters based on core guesses and prefix matching
+        final_clusters, final_singletons = _build_final_clusters(
+            initial_clusters,
+            video_files,
+            asset_files,
+        )
 
         sanitized_name = _sanitize_folder_name(folder)
         report_filename = f"{timestamp}_{sanitized_name}.txt"
         report_path = Path("dev") / "fuzzy_test" / report_filename
 
-        _write_report(folder, clusters, singletons, report_path)
+        _write_report(folder, final_clusters, final_singletons, report_path)
         sys.stderr.write(f"[INFO] Wrote report: {report_path}\n")
 
     return 0

@@ -169,3 +169,44 @@
   - No background loops.
   - No writes to `library_items` in PRE-PROJECT.
   - Actual ffmpeg integration is a later step.
+
+## 7. Experimental: Fuzzy Library Exploration for Media Units and Decorations
+
+- Goal:
+  - Use a fuzzy string matching library on a few real folders to:
+    - Explore whether we can automatically derive media units from filenames.
+    - Discover frequently occurring “decoration” substrings/tokens per folder.
+
+- Library choice:
+  - Prefer `rapidfuzz` because:
+    - Actively maintained and fast.
+    - Flexible similarity functions (ratio, partial, token-based).
+    - No GPL licensing issues (unlike older `fuzzywuzzy` stacks).
+
+- Scope (dev-only, experimental):
+  - Implement a small script, e.g. `dev/fuzzy_explore.py`, that:
+    - Takes one or more folder paths as input (CLI arguments).
+    - For each folder:
+      - Reads all filenames (or stems) in that folder.
+      - Uses fuzzy similarity to cluster filenames into candidate media units.
+        - Example approach:
+          - Compute pairwise similarity scores between filenames.
+          - Group filenames that are mutually above a chosen threshold.
+      - For each cluster (candidate media unit):
+        - Propose a “core” string (e.g. longest common prefix or common token subsequence).
+        - List all member files.
+        - Derive per-file “decorations” as the parts of the filename that differ from the core.
+      - For the folder as a whole:
+        - Aggregate decorations across all clusters.
+        - Report the most frequent decoration substrings/tokens.
+  - Output (human-readable, no DB interaction):
+    - Per folder:
+      - `CLUSTER core="..." files=[...]`
+      - `DECORATIONS for this cluster: [...]`
+    - Folder-level summary:
+      - `FOLDER DECORATIONS: token="..." count=N`
+  - Constraints:
+    - No writes to `ingest_log` or `library_items`.
+    - No changes to `processed_flag`.
+    - No background loops; one-shot analysis per invocation.
+    - This is exploratory and separate from Worker A / Worker B and the ingestion spine.

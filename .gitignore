@@ -1,4 +1,5 @@
 .aider*
+mounts/
 __pycache__/
 state/ingest.db
 logs/

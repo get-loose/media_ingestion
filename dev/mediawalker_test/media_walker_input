@@ -1,5 +1,6 @@
 # Example mediawalker input paths (files or folders), one per line.
 # Lines starting with '#' are comments and ignored.
 
-data/inbox
-data/inbox/example.mkv
+#data/inbox
+#data/inbox/example.mkv
+mounts

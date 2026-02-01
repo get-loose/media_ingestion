@@ -2,44 +2,6 @@
 
 Next session we want to discuss **a first-try, simple worker** that reasons over `ingest_log` and (conceptually) `library_items`, without yet implementing a real worker loop.
 
-## 2. Current Implementation to Have in Context
-
-We will reason about a worker **on top of** the existing spine. Please re-add these files (or their contents) in the next session:
-
-- `app/db.py`
-  - Schema for:
-    - `ingest_log`
-    - `library_items`
-  - `record_ingest_intent(...)` behavior.
-
-- `app/ingest.py`
-  - How `ingest_log` rows are created.
-  - Validation rules:
-    - Directory → `EVENT=VALIDATION_ERROR`, exit 1, no `ingest_log` row.
-  - Logging and exit codes.
-
-- `dev/path_ingest.py`
-  - Producer stub behavior.
-  - Format of `dev/host.log` lines (`EVENT=DISPATCH`).
-
-- `dev/inspect_ingest_log.py`
-  - How we inspect `ingest_log` (including colored output and dotted `file_size`).
-
-- `dev/inspect_library_items.py`
-  - How we will inspect `library_items` once we start populating it.
-
-- `dev/mediawalker_test/mediawalker_test.sh`
-- `dev/mediawalker_test/media_walker_input`
-  - How we bulk-populate `ingest_log` in dev.
-  - Remember: this script is **experimental**, dev-only, and not part of the ingestion contract.
-
-- `PRE_PROJECT.md`
-- `PRE_PROJECT_PROGRESS.md`
-  - To keep pre-project guardrails in mind:
-    - No real worker loops yet.
-    - No background processing.
-    - Worker design is **docs-first**, code (if any) must be explicit, one-off helpers.
-
 ## 3. Brainstorming Context for Worker & Media Units
 
 Re-add these brainstorming docs so we can align the worker design with existing ideas:

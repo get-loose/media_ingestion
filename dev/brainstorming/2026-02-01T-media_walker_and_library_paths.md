@@ -16,14 +16,14 @@ Some ideas here may be incompatible with earlier brainstorms; where that is the 
 
 ## 1. Scripts: walk_media vs mediawalker_test
 
-- `mediaserver_scripts/walk_media`:
+- `mediaserver_scripts/walk_media.sh`:
   - Bash script.
   - Part of the **final project**.
   - User-triggered on Unraid to walk media folders.
   - Separate from inotify-triggered ingestion.
   - Currently a **placeholder** with no real behavior.
 
-- `dev/mediawalker_test/mediawalker_test`:
+- `dev/mediawalker_test/mediawalker_test.sh`:
   - Bash script.
   - **Experimental**, development-only.
   - Walks files/folders and fires ingestion via `dev.path_ingest`.
@@ -108,7 +108,7 @@ Some ideas here may be incompatible with earlier brainstorms; where that is the 
   ```
 
 - Current pre-project behavior:
-  - `dev/mediawalker_test/mediawalker_test` runs locally and calls:
+  - `dev/mediawalker_test/mediawalker_test.sh` runs locally and calls:
 
     ```bash
     uv run python -m dev.path_ingest <relative-path>

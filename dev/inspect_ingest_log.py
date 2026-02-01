@@ -18,10 +18,18 @@ class _Color:
     YELLOW = "\033[33m"
     GREEN = "\033[32m"
     MAGENTA = "\033[35m"
+    RED = "\033[31m"
+    ORANGE = "\033[38;5;208m"  # 256-color "orange"
+    DARK_GREEN = "\033[32;2m"  # dim green for filenames
 
 
 def _color(text: str, color: str) -> str:
     return f"{color}{text}{_Color.RESET}"
+
+
+def _format_with_dots(n: int) -> str:
+    """Format an integer with dots as thousands separators (e.g. 96.703.164)."""
+    return f"{n:,}".replace(",", ".")
 
 
 def _print_rows(cursor: sqlite3.Cursor, table: str, limit: int) -> None:
@@ -46,13 +54,36 @@ def _print_rows(cursor: sqlite3.Cursor, table: str, limit: int) -> None:
     print(_color("-" * 80, _Color.DIM))
 
     for idx, row in enumerate(rows, start=1):
-        # Build a colored row: id in green, NULLs dimmed, others plain
+        # Build a colored row: id in green, NULLs dimmed, special handling
+        # for original_path, file_size, group_id, and error_message.
         formatted_values: list[str] = []
         for col_name, value in zip(col_names, row):
             if value is None:
                 formatted_values.append(_color("NULL", _Color.DIM))
             elif col_name == "id":
                 formatted_values.append(_color(str(value), _Color.GREEN))
+            elif col_name == "group_id":
+                formatted_values.append(_color(str(value), _Color.RED))
+            elif col_name == "error_message":
+                formatted_values.append(_color(str(value), _Color.ORANGE))
+            elif col_name == "original_path":
+                text = str(value)
+                if "/" in text:
+                    dir_part, file_part = text.rsplit("/", 1)
+                    colored = (
+                        _color(dir_part + "/", _Color.GREEN)
+                        + _color(file_part, _Color.DARK_GREEN)
+                    )
+                    formatted_values.append(colored)
+                else:
+                    # No slash, treat whole as filename
+                    formatted_values.append(_color(text, _Color.DARK_GREEN))
+            elif col_name == "file_size":
+                try:
+                    n = int(value)
+                    formatted_values.append(_format_with_dots(n))
+                except (TypeError, ValueError):
+                    formatted_values.append(str(value))
             else:
                 formatted_values.append(str(value))
 

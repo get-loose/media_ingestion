@@ -25,6 +25,19 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 INPUT_FILE="${SCRIPT_DIR}/media_walker_input"
 
+# Simple ANSI colors for readability
+COLOR_RESET="\033[0m"
+COLOR_BOLD="\033[1m"
+COLOR_DIM="\033[2m"
+COLOR_GREEN="\033[32m"
+COLOR_YELLOW="\033[33m"
+COLOR_CYAN="\033[36m"
+
+color() {
+    # usage: color "TEXT" "$COLOR_CODE"
+    printf "%b%s%b" "$2" "$1" "$COLOR_RESET"
+}
+
 # File extensions to include (lowercase, without dot)
 INCLUDE_EXTENSIONS=("mp4" "jpg" "nfo")
 
@@ -51,7 +64,9 @@ ingest_file() {
     local rel_path
     rel_path="$(realpath --relative-to="${PROJECT_ROOT}" "$abs_path")"
 
-    echo "Ingesting: ${rel_path}"
+    printf "\n%s %s\n" \
+        "$(color '[INGEST]' "$COLOR_GREEN")" \
+        "$(color "$rel_path" "$COLOR_CYAN")"
 
     # Local dev: call the producer stub directly via uv
     # NOTE: In final Unraid deployment, this will be replaced by a docker exec
@@ -67,10 +82,18 @@ walk_path() {
     local path="$1"
 
     if [[ -d "$path" ]]; then
+        printf "\n%s %s\n" \
+            "$(color '[DIR]' "$COLOR_BOLD")" \
+            "$(color "$path" "$COLOR_CYAN")"
+
         # Directory: recurse and ingest matching files
         while IFS= read -r -d '' file; do
             if has_included_extension "$file"; then
                 ingest_file "$file"
+            else
+                printf "\n%s %s\n" \
+                    "$(color '[SKIP]' "$COLOR_DIM")" \
+                    "$(color "$file (extension not included)" "$COLOR_DIM")"
             fi
         done < <(find "$path" -type f -print0)
     elif [[ -f "$path" ]]; then
@@ -78,10 +101,14 @@ walk_path() {
         if has_included_extension "$path"; then
             ingest_file "$path"
         else
-            echo "Skipping (extension not included): $path"
+            printf "\n%s %s\n" \
+                "$(color '[SKIP]' "$COLOR_DIM")" \
+                "$(color "$path (extension not included)" "$COLOR_DIM")"
         fi
     else
-        echo "Warning: path does not exist or is not a regular file/directory: $path" >&2
+        printf "\n%s %s\n" \
+            "$(color '[WARN]' "$COLOR_YELLOW")" \
+            "$(color "path does not exist or is not a regular file/directory: $path" "$COLOR_YELLOW")" >&2
     fi
 }
 
@@ -96,7 +123,8 @@ if [[ "$#" -gt 0 ]]; then
 else
     # No args: fall back to media_walker_input
     if [[ ! -f "$INPUT_FILE" ]]; then
-        echo "Error: no arguments provided and input file not found: $INPUT_FILE" >&2
+        printf "%s\n" \
+            "$(color "Error: no arguments provided and input file not found: $INPUT_FILE" "$COLOR_YELLOW")" >&2
         exit 1
     fi
 
@@ -109,6 +137,8 @@ else
 fi
 
 # Process all paths
+printf "%s\n" "$(color '=== mediawalker_test.sh starting ===' "$COLOR_BOLD")"
+
 for p in "${PATHS[@]}"; do
     # Interpret paths relative to project root if they are not absolute
     if [[ "$p" = /* ]]; then
@@ -117,3 +147,5 @@ for p in "${PATHS[@]}"; do
         walk_path "${PROJECT_ROOT}/${p}"
     fi
 done
+
+printf "\n%s\n" "$(color '=== mediawalker_test.sh done ===' "$COLOR_BOLD")"

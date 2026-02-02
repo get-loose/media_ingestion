@@ -424,17 +424,25 @@ def _write_report(
         else:
             lines.append("  SIGNIFICANT TAG: (none with >=90% coverage)")
 
-        # List all shared substrings with brief remarks
-        lines.append("  OTHER SHARED STRINGS (from first few cores):")
-        for sub, count, ratio in tag_infos:
-            remark = ""
-            if ratio >= 0.9:
-                remark = " (>=90% of non-short cores)"
-            elif ratio >= 0.5:
-                remark = " (>=50% of non-short cores)"
-            lines.append(
-                f'    "{sub}"  in {count}/{total_normals} non-short cores{remark}'
+        # List only the top 5 shared substrings with brief remarks
+        lines.append("  OTHER SHARED STRINGS (top 5 from first few cores):")
+        if tag_infos:
+            # Sort by coverage (ratio desc), then by length desc, then lexicographically
+            tag_infos_sorted = sorted(
+                tag_infos,
+                key=lambda t: (-t[2], -len(t[0]), t[0]),
             )
+            for sub, count, ratio in tag_infos_sorted[:5]:
+                remark = ""
+                if ratio >= 0.9:
+                    remark = " (>=90% of non-short cores)"
+                elif ratio >= 0.5:
+                    remark = " (>=50% of non-short cores)"
+                lines.append(
+                    f'    "{sub}"  in {count}/{total_normals} non-short cores{remark}'
+                )
+        else:
+            lines.append("    (none)")
     lines.append("")
 
     # CLUSTERS WITH MULTIPLE VIDEO FILES

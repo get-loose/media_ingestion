@@ -170,43 +170,107 @@
   - No writes to `library_items` in PRE-PROJECT.
   - Actual ffmpeg integration is a later step.
 
-## 7. Experimental: Fuzzy Library Exploration for Media Units and Decorations
+## 7. Worker A – Token-Based Media Unit Grouping (Better Than Fuzzy)
 
-- Goal:
-  - Use a fuzzy string matching library on a few real folders to:
-    - Explore whether we can automatically derive media units from filenames.
-    - Discover frequently occurring “decoration” substrings/tokens per folder.
+This section refines Worker A’s design, focusing on a **token-based, folder-local** approach
+instead of fuzzy clustering. The goal is to align with downloader guarantees and avoid
+over-grouping issues seen in the fuzzy experiment (e.g. `fox_` cores).
 
-- Library choice:
-  - Prefer `rapidfuzz` because:
-    - Actively maintained and fast.
-    - Flexible similarity functions (ratio, partial, token-based).
-    - No GPL licensing issues (unlike older `fuzzywuzzy` stacks).
+### 7.1. Core Idea
 
-- Scope (dev-only, experimental):
-  - Implement a small script, e.g. `dev/fuzzy_explore.py`, that:
-    - Takes one or more folder paths as input (CLI arguments).
-    - For each folder:
-      - Reads all filenames (or stems) in that folder.
-      - Uses fuzzy similarity to cluster filenames into candidate media units.
-        - Example approach:
-          - Compute pairwise similarity scores between filenames.
-          - Group filenames that are mutually above a chosen threshold.
-      - For each cluster (candidate media unit):
-        - Propose a “core” string (e.g. longest common prefix or common token subsequence).
-        - List all member files.
-        - Derive per-file “decorations” as the parts of the filename that differ from the core.
-      - For the folder as a whole:
-        - Aggregate decorations across all clusters.
-        - Report the most frequent decoration substrings/tokens.
-  - Output (human-readable, no DB interaction):
-    - Per folder:
-      - `CLUSTER core="..." files=[...]`
-      - `DECORATIONS for this cluster: [...]`
-    - Folder-level summary:
-      - `FOLDER DECORATIONS: token="..." count=N`
-  - Constraints:
-    - No writes to `ingest_log` or `library_items`.
-    - No changes to `processed_flag`.
-    - No background loops; one-shot analysis per invocation.
-    - This is exploratory and separate from Worker A / Worker B and the ingestion spine.
+- Treat each **bottom-level folder** as a high-cohesion universe.
+- Within a folder:
+  - Filenames for a given media unit share a **core name**.
+  - Extra pieces (resolution, site, time, actor, production house, uploader) are **decorations**.
+- Worker A should:
+  - Derive **cores** directly from filenames in the folder (token-based), not from fuzzy clusters.
+  - Group files into media units by shared cores.
+  - Surface decorations per unit and per folder.
+
+### 7.2. Tokenization
+
+For each filename (stem, without extension):
+
+- Split into tokens on separators:
+  - Characters: `_`, `-`, `.`, space, and possibly brackets `[]()`.
+- Example:
+  - `sdfw_moviename1_720p-20250101-0116` →
+    - tokens: `["sdfw", "moviename1", "720p", "20250101", "0116"]`
+  - `a_brown_fox_jumped_20250101` →
+    - tokens: `["a", "brown", "fox", "jumped", "20250101"]`
+
+Tokenization is **per folder** and uses only stdlib.
+
+### 7.3. Per-Folder Core Derivation (No Fuzzy)
+
+Within a folder:
+
+1. **Group by video stems first**:
+   - Consider only PRIMARY files (video extensions).
+   - For each video stem, keep its token list.
+
+2. **Find candidate cores per video**:
+   - For each video stem:
+     - Look at other stems in the same folder.
+     - Compute a **longest common token prefix** with its nearest neighbors.
+     - Require a minimum number of shared tokens (e.g. at least 2–3 tokens) to consider them part of the same media unit.
+   - Example:
+     - `["a", "brown", "fox", "jumped", "20250101"]`
+     - `["a", "brown", "fox", "jumped", "20250102"]`
+     - Core tokens: `["a", "brown", "fox", "jumped"]`.
+
+3. **Avoid generic cores**:
+   - If a candidate core is very short (e.g. 1 token like `"fox"`), treat it as **too generic**.
+   - Prefer longer token prefixes that distinguish units:
+     - `["a", "brown", "fox"]` vs `["a", "white", "fox"]` should become **two different cores**.
+
+4. **Assign assets to cores**:
+   - For each ASSET file (jpg/nfo/srt):
+     - Tokenize its stem.
+     - Find the video core whose token prefix best matches (e.g. longest common token prefix).
+     - Attach the asset to that media unit if the match is strong enough.
+
+### 7.4. Handling Decorations
+
+Once cores are defined:
+
+- For each media unit:
+  - Decorations = tokens in member filenames **after** the core tokens.
+  - Example:
+    - Core tokens: `["moviename1"]`
+    - File tokens: `["sdfw", "moviename1", "720p", "20250101", "0116"]`
+    - Decorations: `["sdfw", "720p", "20250101", "0116"]`.
+
+- For the folder:
+  - Aggregate decoration tokens across all units.
+  - Identify:
+    - Tokens that recur across many units (likely site, production house, uploader).
+    - Tokens that are per-unit (actor, specific tags).
+  - Worker A does **not** interpret them yet; it just surfaces them.
+
+### 7.5. Advantages Over Fuzzy
+
+- **Deterministic and explainable**:
+  - No similarity thresholds or opaque scores.
+  - Grouping is based on explicit token prefixes and folder-local patterns.
+- **Respects downloader guarantees**:
+  - One core per media unit, shared across its files.
+  - Decorations are added consistently by the downloader.
+- **Avoids over-grouping**:
+  - Cases like `a_brown_fox_jumped...` vs `a_white_fox_jumped...`:
+    - Token-based cores distinguish them by `["a", "brown", "fox"]` vs `["a", "white", "fox"]`.
+    - They do not collapse into a generic `["fox"]` core.
+
+### 7.6. Worker A Focus in Next Sessions
+
+- Design a **token-based core derivation algorithm** in more detail:
+  - Exact tokenization rules.
+  - Minimum core length (in tokens).
+  - How to handle random prefixes (fixed-length noise at the start).
+- Define Worker A’s **dry-run output**:
+  - `MEDIA_UNIT folder=... core_tokens=[...] files=[...]`
+  - `DECORATIONS unit=... tokens=[...]`
+  - `FOLDER_DECORATIONS tokens=[...]`
+- Keep Worker A:
+  - Read-only (no DB writes in PRE-PROJECT).
+  - Focused on structure discovery, not on thumbnails or NFO writing yet.

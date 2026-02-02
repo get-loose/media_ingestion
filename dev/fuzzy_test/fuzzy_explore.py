@@ -390,7 +390,7 @@ def _write_report(
         total_normals = len(normal_cores)
 
         def _normalize_tag_for_match(s: str) -> str:
-            # Same logic as in _build_final_clusters
+            # Strip leading/trailing non-alphanumeric characters, keep middle intact
             start = 0
             end = len(s)
             while start < end and not s[start].isalnum():
@@ -399,7 +399,7 @@ def _write_report(
                 end -= 1
             return s[start:end]
 
-        # Count how many normal cores contain each shared substring
+        # Build tag_infos: (sub, count, ratio) for each shared_substring
         tag_infos: List[Tuple[str, int, float]] = []
         for sub in shared_substrings:
             norm = _normalize_tag_for_match(sub)
@@ -409,30 +409,108 @@ def _write_report(
             ratio = count / total_normals if total_normals else 0.0
             tag_infos.append((sub, count, ratio))
 
-        # Determine "significant tag" (only one, must be in >= 90% of normals)
-        significant_tags = [
-            (sub, count, ratio)
-            for (sub, count, ratio) in tag_infos
-            if ratio >= 0.9
-        ]
-
-        if len(significant_tags) == 1:
-            sub, count, ratio = significant_tags[0]
-            lines.append(
-                f'  SIGNIFICANT TAG: "{sub}"  present_in={count}/{total_normals} ({ratio:.0%} of non-short cores)'
-            )
+        # If we have no usable candidates, bail out
+        if not tag_infos:
+            lines.append("  (none)")
+            lines.append("")
         else:
-            lines.append("  SIGNIFICANT TAG: (none with >=90% coverage)")
-
-        # List only the top 5 shared substrings with brief remarks
-        lines.append("  OTHER SHARED STRINGS (top 5 from first few cores):")
-        if tag_infos:
-            # Sort by coverage (ratio desc), then by length desc, then lexicographically
+            # Take top 5 candidates by coverage, then length, then lexicographically
             tag_infos_sorted = sorted(
                 tag_infos,
                 key=lambda t: (-t[2], -len(t[0]), t[0]),
             )
-            for sub, count, ratio in tag_infos_sorted[:5]:
+            top5 = tag_infos_sorted[:5]
+
+            # Derive a seed substring from top5: use the longest normalized candidate
+            # that appears in at least one core
+            seed_norm = ""
+            for sub, count, ratio in top5:
+                norm = _normalize_tag_for_match(sub)
+                if norm:
+                    seed_norm = norm
+                    break
+
+            significant_tag = None
+            significant_count = 0
+            significant_ratio = 0.0
+
+            if seed_norm:
+                # Check coverage of seed_norm across all non-short cores
+                matching_cores = [c for c in normal_cores if seed_norm in c]
+                match_count = len(matching_cores)
+                match_ratio = match_count / total_normals if total_normals else 0.0
+
+                if match_ratio >= 0.9 and matching_cores:
+                    # Expand seed_norm left and right across matching cores
+                    current = seed_norm
+
+                    # Helper to find first occurrence index in each core
+                    def _find_positions(sub: str, cores: Sequence[str]) -> List[int]:
+                        positions: List[int] = []
+                        for core in cores:
+                            idx = core.find(sub)
+                            if idx == -1:
+                                return []
+                            positions.append(idx)
+                        return positions
+
+                    # Expand to the left
+                    while True:
+                        positions = _find_positions(current, matching_cores)
+                        if not positions:
+                            break
+                        # Check if all have a character before current
+                        if any(pos == 0 for pos in positions):
+                            break
+                        # Candidate left char must be the same in all cores
+                        left_chars = {
+                            core[pos - 1] for core, pos in zip(matching_cores, positions)
+                        }
+                        if len(left_chars) != 1:
+                            break
+                        left_char = next(iter(left_chars))
+                        current = left_char + current
+
+                    # Expand to the right
+                    while True:
+                        positions = _find_positions(current, matching_cores)
+                        if not positions:
+                            break
+                        # End index of current in each core
+                        ends = [pos + len(current) for pos in positions]
+                        # Check if all have a character after current
+                        if any(end >= len(core) for core, end in zip(matching_cores, ends)):
+                            break
+                        # Candidate right char must be the same in all cores
+                        right_chars = {
+                            core[end] for core, end in zip(matching_cores, ends)
+                        }
+                        if len(right_chars) != 1:
+                            break
+                        right_char = next(iter(right_chars))
+                        current = current + right_char
+
+                    # Normalize expanded result (strip leading/trailing non-alphanumerics)
+                    final_tag = _normalize_tag_for_match(current)
+                    if final_tag and len(final_tag) >= 3:
+                        # Final coverage check
+                        final_count = sum(1 for c in normal_cores if final_tag in c)
+                        final_ratio = final_count / total_normals if total_normals else 0.0
+                        if final_ratio >= 0.9:
+                            significant_tag = final_tag
+                            significant_count = final_count
+                            significant_ratio = final_ratio
+
+            if significant_tag is not None:
+                lines.append(
+                    f'  SIGNIFICANT TAG: "{significant_tag}"  present_in={significant_count}/{total_normals} ({significant_ratio:.0%} of non-short cores)'
+                )
+            else:
+                lines.append("  SIGNIFICANT TAG: (none with >=90% coverage)")
+
+            # Also show top 5 raw shared substrings with remarks
+            lines.append("  OTHER SHARED STRINGS (top 5 from first few cores):")
+            for sub, count, ratio in top5:
                 remark = ""
                 if ratio >= 0.9:
                     remark = " (>=90% of non-short cores)"
@@ -441,8 +519,7 @@ def _write_report(
                 lines.append(
                     f'    "{sub}"  in {count}/{total_normals} non-short cores{remark}'
                 )
-        else:
-            lines.append("    (none)")
+            lines.append("")
     lines.append("")
 
     # CLUSTERS WITH MULTIPLE VIDEO FILES

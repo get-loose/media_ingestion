@@ -171,7 +171,7 @@ def _build_final_clusters(
     initial_clusters: Sequence[Cluster],
     video_files: Sequence[Path],
     asset_files: Sequence[Path],
-) -> Tuple[List[FinalCluster], List[Path]]:
+) -> Tuple[List[FinalCluster], List[Path], List[str], List[str], List[str]]:
     # All candidate files (videos + assets)
     all_files: List[Path] = sorted(
         list(video_files) + list(asset_files),
@@ -190,18 +190,55 @@ def _build_final_clusters(
 
     if not core_candidates:
         # No cores at all: everything is a singleton
-        return [], all_files
+        return [], all_files, [], [], []
 
     # Compute average core length
     avg_len = sum(len(c) for c in core_candidates) / len(core_candidates)
-    short_threshold = 0.1 * avg_len  # 10% of average length
+
+    # "Short" = length < half of average
+    short_threshold = 0.5 * avg_len
 
     normal_cores = [c for c in core_candidates if len(c) >= short_threshold]
     short_cores = [c for c in core_candidates if len(c) < short_threshold]
 
+    # Normal cores: alphabetical
     normal_cores.sort()
-    short_cores.sort()
+
+    # Short cores: sort from longer to shorter
+    short_cores.sort(key=lambda s: (-len(s), s))
+
     ordered_cores = normal_cores + short_cores
+
+    # Compute shared substrings from the first few normal cores
+    def _common_substrings(a: str, b: str) -> List[str]:
+        # Very simple: all substrings of a that also appear in b, length >= 2
+        subs: set[str] = set()
+        la = len(a)
+        for i in range(la):
+            for j in range(i + 2, la + 1):
+                sub = a[i:j]
+                if sub in b:
+                    subs.add(sub)
+        return list(subs)
+
+    shared_substrings: List[str] = []
+    if normal_cores:
+        # Take up to first 5 normal cores
+        sample = normal_cores[:5]
+        # Start with all substrings of the first core
+        base = sample[0]
+        current: set[str] = set()
+        lb = len(base)
+        for i in range(lb):
+            for j in range(i + 2, lb + 1):
+                current.add(base[i:j])
+        # Intersect with substrings of the others
+        for other in sample[1:]:
+            other_subs = set(_common_substrings(base, other))
+            current &= other_subs
+            if not current:
+                break
+        shared_substrings = sorted(current, key=lambda s: (-len(s), s))
 
     # Assign files to cores by prefix
     file_assigned: Dict[Path, bool] = {f: False for f in all_files}
@@ -240,7 +277,9 @@ def _build_final_clusters(
     ]
     final_singletons.sort(key=lambda p: p.name)
 
-    return final_clusters, final_singletons
+    all_cores = [c.core_guess for c in final_clusters]
+
+    return final_clusters, final_singletons, all_cores, normal_cores, shared_substrings
 
 
 def _sanitize_folder_name(folder: Path) -> str:
@@ -264,6 +303,9 @@ def _write_report(
     folder: Path,
     clusters: Sequence[FinalCluster],
     singletons: Sequence[Path],
+    all_cores: Sequence[str],
+    normal_cores: Sequence[str],
+    shared_substrings: Sequence[str],
     report_path: Path,
 ) -> None:
     lines: List[str] = []
@@ -294,6 +336,47 @@ def _write_report(
         lines.append(f'  core="{core_guess}"  files={count}')
     lines.append("")
     lines.append(f"TOTAL MEDIA UNITS (clusters): {len(clusters)}")
+    lines.append("")
+
+    # SIGNIFICANT TAGS FROM CORES
+    lines.append("CORE-BASED SHARED STRINGS:")
+    if not shared_substrings or not normal_cores:
+        lines.append("  (none)")
+    else:
+        total_normals = len(normal_cores)
+        # Count how many normal cores contain each shared substring
+        tag_infos: List[Tuple[str, int, float]] = []
+        for sub in shared_substrings:
+            count = sum(1 for c in normal_cores if sub in c)
+            ratio = count / total_normals if total_normals else 0.0
+            tag_infos.append((sub, count, ratio))
+
+        # Determine "significant tag" (only one, must be in >= 90% of normals)
+        significant_tags = [
+            (sub, count, ratio)
+            for (sub, count, ratio) in tag_infos
+            if ratio >= 0.9
+        ]
+
+        if len(significant_tags) == 1:
+            sub, count, ratio = significant_tags[0]
+            lines.append(
+                f'  SIGNIFICANT TAG: "{sub}"  present_in={count}/{total_normals} ({ratio:.0%} of non-short cores)'
+            )
+        else:
+            lines.append("  SIGNIFICANT TAG: (none with >=90% coverage)")
+
+        # List all shared substrings with brief remarks
+        lines.append("  OTHER SHARED STRINGS (from first few cores):")
+        for sub, count, ratio in tag_infos:
+            remark = ""
+            if ratio >= 0.9:
+                remark = " (>=90% of non-short cores)"
+            elif ratio >= 0.5:
+                remark = " (>=50% of non-short cores)"
+            lines.append(
+                f'    "{sub}"  in {count}/{total_normals} non-short cores{remark}'
+            )
     lines.append("")
 
     # CLUSTERS WITH MULTIPLE VIDEO FILES
@@ -331,8 +414,13 @@ def _write_report(
         for tokens in decorations.values():
             for token in tokens:
                 token = _format_decoration_token(token)
-                # Skip tokens that are exactly a core name
-                if token in core_strings:
+                # Skip tokens that are part of any core name
+                skip = False
+                for core in core_strings:
+                    if token and token in core:
+                        skip = True
+                        break
+                if skip:
                     continue
                 decoration_counter[token] += 1
 
@@ -428,7 +516,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         initial_clusters, _ = _cluster_files(video_files, asset_files)
 
         # Build final clusters based on core guesses and prefix matching
-        final_clusters, final_singletons = _build_final_clusters(
+        (
+            final_clusters,
+            final_singletons,
+            all_cores,
+            normal_cores,
+            shared_substrings,
+        ) = _build_final_clusters(
             initial_clusters,
             video_files,
             asset_files,
@@ -438,7 +532,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         report_filename = f"{timestamp}_{sanitized_name}.txt"
         report_path = Path("dev") / "fuzzy_test" / "logs" / report_filename
 
-        _write_report(folder, final_clusters, final_singletons, report_path)
+        _write_report(
+            folder,
+            final_clusters,
+            final_singletons,
+            all_cores,
+            normal_cores,
+            shared_substrings,
+            report_path,
+        )
         sys.stderr.write(f"[INFO] Wrote report: {report_path}\n")
 
     return 0

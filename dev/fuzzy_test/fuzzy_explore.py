@@ -238,7 +238,39 @@ def _build_final_clusters(
             current &= other_subs
             if not current:
                 break
-        shared_substrings = sorted(current, key=lambda s: (-len(s), s))
+
+        # Post-process shared substrings:
+        # - drop very short ones
+        # - normalize by stripping leading/trailing punctuation-like chars
+        # - group by normalized form and keep the longest representative
+        raw_substrings = sorted(current, key=lambda s: (-len(s), s))
+
+        def _normalize_tag(s: str) -> str:
+            # Strip leading/trailing non-alphanumeric characters
+            start = 0
+            end = len(s)
+            while start < end and not s[start].isalnum():
+                start += 1
+            while end > start and not s[end - 1].isalnum():
+                end -= 1
+            return s[start:end]
+
+        tag_map: Dict[str, str] = {}
+        for sub in raw_substrings:
+            if len(sub) < 3:
+                continue
+            norm = _normalize_tag(sub)
+            if not norm:
+                continue
+            # Keep the longest original substring for each normalized form
+            prev = tag_map.get(norm)
+            if prev is None or len(sub) > len(prev):
+                tag_map[norm] = sub
+
+        shared_substrings = sorted(
+            tag_map.values(),
+            key=lambda s: (-len(s), s),
+        )
 
     # Assign files to cores by prefix
     file_assigned: Dict[Path, bool] = {f: False for f in all_files}
@@ -277,7 +309,8 @@ def _build_final_clusters(
     ]
     final_singletons.sort(key=lambda p: p.name)
 
-    all_cores = [c.core_guess for c in final_clusters]
+    # all_cores: all candidate cores from fuzzy (including those that captured no files)
+    all_cores = core_candidates
 
     return final_clusters, final_singletons, all_cores, normal_cores, shared_substrings
 
@@ -329,8 +362,11 @@ def _write_report(
     # MEDIA UNIT CORES
     lines.append("MEDIA UNIT CORES (clusters only):")
     core_summaries: List[Tuple[str, int]] = []
+    kept_core_set = set()
+
     for cluster in clusters:
         core_summaries.append((cluster.core_guess, len(cluster.members)))
+        kept_core_set.add(cluster.core_guess)
 
     for core_guess, count in core_summaries:
         lines.append(f'  core="{core_guess}"  files={count}')
@@ -338,16 +374,38 @@ def _write_report(
     lines.append(f"TOTAL MEDIA UNITS (clusters): {len(clusters)}")
     lines.append("")
 
+    # Dismissed cores: cores that never captured any files in the final pass
+    dismissed_cores = [c for c in all_cores if c not in kept_core_set]
+    if dismissed_cores:
+        lines.append("DISMISSED CORES (no files captured by prefix matching):")
+        for core in dismissed_cores:
+            lines.append(f'  core="{core}"')
+        lines.append("")
+
     # SIGNIFICANT TAGS FROM CORES
     lines.append("CORE-BASED SHARED STRINGS:")
     if not shared_substrings or not normal_cores:
         lines.append("  (none)")
     else:
         total_normals = len(normal_cores)
+
+        def _normalize_tag_for_match(s: str) -> str:
+            # Same logic as in _build_final_clusters
+            start = 0
+            end = len(s)
+            while start < end and not s[start].isalnum():
+                start += 1
+            while end > start and not s[end - 1].isalnum():
+                end -= 1
+            return s[start:end]
+
         # Count how many normal cores contain each shared substring
         tag_infos: List[Tuple[str, int, float]] = []
         for sub in shared_substrings:
-            count = sum(1 for c in normal_cores if sub in c)
+            norm = _normalize_tag_for_match(sub)
+            if not norm:
+                continue
+            count = sum(1 for c in normal_cores if norm in c)
             ratio = count / total_normals if total_normals else 0.0
             tag_infos.append((sub, count, ratio))
 

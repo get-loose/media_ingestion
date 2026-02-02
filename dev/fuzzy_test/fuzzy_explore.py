@@ -272,26 +272,28 @@ def _build_final_clusters(
             key=lambda s: (-len(s), s),
         )
 
-    # Assign files to cores by prefix
-    file_assigned: Dict[Path, bool] = {f: False for f in all_files}
+    # Assign each file to the longest matching core (prefix match)
     final_clusters: List[FinalCluster] = []
+    core_to_members: Dict[str, List[Path]] = {core: [] for core in ordered_cores}
 
-    for core in ordered_cores:
-        members: List[Path] = []
-        for f in all_files:
-            if file_assigned[f]:
-                continue
-            stem = f.stem
-            if stem.startswith(core):
-                members.append(f)
-
-        if not members:
-            # This core did not capture any files; discard it
+    for f in all_files:
+        stem = f.stem
+        # Find all cores that are a prefix of this stem
+        matching_cores = [core for core in ordered_cores if stem.startswith(core)]
+        if not matching_cores:
             continue
+        # Choose the longest matching core; if tie, the earliest in ordered_cores
+        best_core = max(
+            matching_cores,
+            key=lambda c: (len(c), -ordered_cores.index(c)),
+        )
+        core_to_members[best_core].append(f)
 
-        for f in members:
-            file_assigned[f] = True
-
+    # Build FinalCluster objects from core_to_members
+    for core in ordered_cores:
+        members = core_to_members.get(core, [])
+        if not members:
+            continue
         video_count = sum(
             1 for f in members if f.suffix.lower() in VIDEO_EXTENSIONS
         )
@@ -303,9 +305,10 @@ def _build_final_clusters(
             )
         )
 
-    # Any unassigned files are singletons
+    # Any file not assigned to any core is a singleton
+    assigned_files = {f for members in core_to_members.values() for f in members}
     final_singletons: List[Path] = [
-        f for f, assigned in file_assigned.items() if not assigned
+        f for f in all_files if f not in assigned_files
     ]
     final_singletons.sort(key=lambda p: p.name)
 

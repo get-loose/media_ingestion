@@ -9,12 +9,40 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 from rapidfuzz import fuzz
 
+# NOTE: Media-unit core derivation options (design notes)
+#
+# The current approach:
+# - Uses fuzzy clustering on full filenames to get initial clusters.
+# - Derives core candidates as longest common prefixes per fuzzy cluster.
+# - Then assigns each file to the longest core that is a prefix of its stem.
+#
+# This can over-group distinct units when fuzzy puts them in one cluster
+# and the common prefix is short/generic (e.g. "fox_").
+#
+# Future options to improve this:
+# 1) Tighten fuzzy clustering:
+#    - Increase SIMILARITY_THRESHOLD so fewer dissimilar files share a cluster.
+#    - Quick to try, but brittle and folder-dependent.
+# 2) Derive cores per file (token-based, folder-local):
+#    - Ignore fuzzy clusters for cores.
+#    - For each file, derive a local core from its own variants (video + jpg + nfo)
+#      using tokenization and shared prefixes/suffixes.
+#    - More aligned with downloader guarantees; less "magic".
+# 3) Use the significant tag as an anchor:
+#    - Once a folder-level significant tag is known, define cores relative to it:
+#      e.g. take a window around the tag within each stem.
+#    - Could separate units like "a_brown_fox_jumped..." vs "a_white_fox_jumped..."
+#      when they share a producer tag but differ elsewhere.
+#
+# For now this script remains exploratory; Worker A will likely use a more
+# explicit, token-based core derivation instead of this fuzzy-first approach.
+
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi"}
 ASSET_EXTENSIONS = {".jpg", ".jpeg", ".nfo"}
 ALL_EXTENSIONS = VIDEO_EXTENSIONS | ASSET_EXTENSIONS
 
-SIMILARITY_THRESHOLD = 90
+SIMILARITY_THRESHOLD = 95
 
 
 @dataclass
